@@ -2521,7 +2521,7 @@ func (r *Runner) setListing() {
 			r.out(")\n")
 		case expand.Associative:
 			r.outf("%s=(", name)
-			for _, k := range slices.Sorted(maps.Keys(vr.Map)) {
+			for _, k := range vr.AssocKeys() {
 				r.outf("[%s]=%s ", declQuoteKey(k), declQuote(vr.Map[k]))
 			}
 			r.out(")\n")

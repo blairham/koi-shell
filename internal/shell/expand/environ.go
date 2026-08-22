@@ -5,7 +5,6 @@ package expand
 
 import (
 	"cmp"
-	"maps"
 	"runtime"
 	"slices"
 	"strconv"
@@ -125,6 +124,17 @@ type Variable struct {
 	List []string          // Used when Kind is Indexed.
 	Map  map[string]string // Used when Kind is Associative.
 
+	// MapOrder records the order [Variable.Map]'s keys were assigned
+	// in, oldest first, which is what bash's iteration order of an
+	// associative array is computed from (#749). A Go map carries no
+	// order at all, so it has to be carried beside it.
+	//
+	// It is advisory: a stale or partial sequence still yields a total,
+	// stable order — see assocOrder. Keys it names that Map no longer
+	// holds are ignored, and keys Map holds that it does not name sort
+	// in at the end.
+	MapOrder []string
+
 	// Indexes records the index of each [Variable.List] element when an
 	// indexed array is sparse, such as `a=([2]=x [5]=y)`. The indices
 	// must be unique, non-negative, sorted, and as many as the List
@@ -242,26 +252,34 @@ func (v Variable) indexedKeys() []string {
 	return keys
 }
 
-// assocKeys returns an associative array's keys in the one order every
-// expansion of it must agree on, and assocValues its values in that same
-// order. bash's own order is its hash table's, which koi does not
-// reproduce — but bash guarantees that `${!A[@]}` and `${A[@]}` line up
-// element for element, since reading a map by parallel key and value
-// lists is what an associative array is for. Sorting one by key and the
-// other by *value* answers both questions plausibly and pairs the wrong
-// value with every key.
-func (v Variable) assocKeys() []string {
-	return slices.Sorted(maps.Keys(v.Map))
+// AssocKeys returns an associative array's keys in the one order every
+// expansion of it must agree on, and AssocValues its values in that same
+// order. That order is bash's hash-table order, derived by measurement
+// in assocorder.go (#749); every surface that lists the array has to use
+// these, since `${!A[@]}` and `${A[@]}` must line up element for element
+// — reading a map by parallel key and value lists is what an
+// associative array is for. Sorting one by key and the other by *value*
+// answers both questions plausibly and pairs the wrong value with every
+// key.
+func (v Variable) AssocKeys() []string {
+	return assocOrder(v.Map, v.MapOrder)
 }
 
-func (v Variable) assocValues() []string {
-	keys := v.assocKeys()
+// AssocValues returns the values of v.Map in [Variable.AssocKeys] order.
+func (v Variable) AssocValues() []string {
+	keys := v.AssocKeys()
 	vals := make([]string, len(keys))
 	for i, k := range keys {
 		vals[i] = v.Map[k]
 	}
 	return vals
 }
+
+// The unexported spellings the rest of this package already calls. Kept
+// as aliases so that exporting the pair for interp's declare -p and set
+// printers did not touch every expansion site.
+func (v Variable) assocKeys() []string   { return v.AssocKeys() }
+func (v Variable) assocValues() []string { return v.AssocValues() }
 
 // maxNameRefDepth defines the maximum number of times to follow references when
 // resolving a variable. Otherwise, simple name reference loops could crash a

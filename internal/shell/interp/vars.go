@@ -134,6 +134,7 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 		vr.List = prev.List
 		vr.Indexes = prev.Indexes
 		vr.Map = prev.Map
+		vr.MapOrder = prev.MapOrder
 	} else if prev.ReadOnly && !droppingDanglingRef(prev.Variable, vr) &&
 		!declaringReadOnlyArray(prev.Variable, vr) {
 		return fmt.Errorf("readonly variable")
@@ -952,6 +953,19 @@ func (r *Runner) setVarWithIndex(prev expand.Variable, name string, index syntax
 		if appendElem {
 			valStr = r.appendElemValue(prev.Map[k], valStr, prev.Integer)
 		}
+		// A key already in the table keeps its place; only a new one
+		// joins the insertion sequence, at the end. That is what bash's
+		// table does — re-assigning does not move an entry down its
+		// bucket's chain (#749).
+		//
+		// The place is settled either way, since expand reads the
+		// sequence first-wins, so what the check is really for is the
+		// sequence's *length*: without it a loop assigning one key a
+		// thousand times appends and clones a thousand entries.
+		// TestRunnerAssocOrderSequence is what holds that.
+		if _, had := prev.Map[k]; !had {
+			prev.MapOrder = append(slices.Clone(prev.MapOrder), k)
+		}
 		prev.Map[k] = valStr
 		r.setVar(name, prev)
 		return
@@ -1223,6 +1237,9 @@ func (r *Runner) unsetElem(name, sub string, viaRef bool) bool {
 		// TODO: only clone when inside a subshell and getting a var from outside for the first time
 		vr.Map = maps.Clone(vr.Map)
 		delete(vr.Map, sub)
+		if i := slices.Index(vr.MapOrder, sub); i >= 0 {
+			vr.MapOrder = slices.Delete(slices.Clone(vr.MapOrder), i, i+1)
+		}
 		r.setVar(name, vr)
 	case expand.String:
 		// A scalar can be unset via subscript zero.
@@ -1415,11 +1432,25 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 	}
 	if valType == "-A" {
 		var amap map[string]string
+		var aorder []string
 		if as.Append && prev.Kind == expand.Associative {
 			amap = maps.Clone(prev.Map)
+			aorder = slices.Clone(prev.MapOrder)
 		}
 		if amap == nil {
 			amap = make(map[string]string, len(elems))
+		}
+		// Every element of a compound assignment is an insertion, left
+		// to right, and a repeated key keeps the place its first
+		// mention gave it — `m=([bz]=1 [66]=2 [bz]=3)` lists as
+		// `66 bz`, the same as if the third element were absent (#749).
+		// The check is for the sequence's length as above, not for the
+		// order, which expand's first-wins reading settles anyway.
+		set := func(k, v string) {
+			if _, had := amap[k]; !had {
+				aorder = append(aorder, k)
+			}
+			amap[k] = v
 		}
 		if len(elems) > 0 && elems[0].Index == nil {
 			// bash 5.1+: when the first element has no [key], the words
@@ -1450,7 +1481,7 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				if i+1 < len(words) {
 					val = words[i+1]
 				}
-				amap[words[i]] = val
+				set(words[i], val)
 			}
 		} else {
 			for _, elem := range elems {
@@ -1491,11 +1522,12 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 					}
 					val = r.appendElemValue(base[k], val, prev.Integer)
 				}
-				amap[k] = val
+				set(k, val)
 			}
 		}
 		prev.Kind = expand.Associative
 		prev.Map = amap
+		prev.MapOrder = aorder
 		return name, prev
 	}
 	// The base array which the new elements are set on; empty unless
