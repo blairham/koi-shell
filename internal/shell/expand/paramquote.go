@@ -5,8 +5,6 @@ package expand
 
 import (
 	"fmt"
-	"maps"
-	"slices"
 	"strconv"
 	"strings"
 	"unicode"
@@ -315,7 +313,7 @@ func (cfg *Config) arrayValue(vr Variable) string {
 			return ""
 		}
 		sb.WriteByte('(')
-		for _, k := range slices.Sorted(maps.Keys(vr.Map)) {
+		for _, k := range vr.AssocKeys() {
 			fmt.Fprintf(&sb, "[%s]=%s ", declKey(k, cLocale), declValue(vr.Map[k], cLocale))
 		}
 		sb.WriteByte(')')
@@ -343,7 +341,7 @@ func (cfg *Config) kvPairs(vr Variable) string {
 			fmt.Fprintf(&sb, "%d %s", idx, declValue(v, cLocale))
 		}
 	case Associative:
-		for _, k := range slices.Sorted(maps.Keys(vr.Map)) {
+		for _, k := range vr.AssocKeys() {
 			fmt.Fprintf(&sb, "%s %s ", declKey(k, cLocale), declValue(vr.Map[k], cLocale))
 		}
 	}
@@ -361,7 +359,7 @@ func kvPairList(vr Variable) []string {
 			out = append(out, strconv.Itoa(idx), v)
 		}
 	case Associative:
-		for _, k := range slices.Sorted(maps.Keys(vr.Map)) {
+		for _, k := range vr.AssocKeys() {
 			out = append(out, k, vr.Map[k])
 		}
 	}

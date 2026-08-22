@@ -3834,11 +3834,11 @@ func (r *Runner) printDeclaredAs(head, name string, vr expand.Variable) {
 		}
 		r.out(")\n")
 	case expand.Associative:
-		// Keys are sorted for determinism where bash prints its hash
-		// order, and each element carries bash's trailing space:
+		// Keys come out in bash's hash-table order (#749), and each
+		// element carries bash's trailing space:
 		// ([one]="1" [two]="2" ).
 		r.outf("%s %s=(", head, name)
-		for _, k := range slices.Sorted(maps.Keys(vr.Map)) {
+		for _, k := range vr.AssocKeys() {
 			r.outf("[%s]=%s ", declQuoteKey(k), declQuote(vr.Map[k]))
 		}
 		r.out(")\n")
@@ -3993,6 +3993,7 @@ func (r *Runner) applyArrayKind(vr *expand.Variable, valType, variant, name stri
 				vr.List = []string{vr.Str}
 			} else {
 				vr.Map = map[string]string{"0": vr.Str}
+				vr.MapOrder = []string{"0"}
 			}
 			vr.Str = ""
 		}

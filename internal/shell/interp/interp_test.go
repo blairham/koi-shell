@@ -10192,9 +10192,10 @@ case "+(a|b[" in "+(a|b[") echo m;; esac`, "eq\nm\n"},
 
 	// An associative array's keys and its values come out in the same
 	// order, because reading one against the other is what the two lists
-	// are for. koi's order is sorted by key where bash's is its hash
-	// table's, so the cases that can be compared are the ones that pair
-	// a key with its own value rather than naming an absolute order.
+	// are for. These three assert the pairing and the stability on their
+	// own, which is what they were written for when koi's order was
+	// sorted by key (#751) — they stay because a listing surface can
+	// come apart in either way without the order itself being wrong.
 	{
 		// The pairing is asserted, never the absolute order: values
 		// sorted independently of their keys line up plausibly and
@@ -10213,6 +10214,82 @@ case "+(a|b[" in "+(a|b[") echo m;; esac`, "eq\nm\n"},
 		// agree.
 		"declare -A A=([a]=1 [b]=2 [c]=3 [d]=4 [e]=5 [f]=6); x=(\"${!A[@]}\"); y=(\"${!A[@]}\"); [[ ${x[*]} == \"${y[*]}\" ]] && echo stable || echo \"unstable ${x[*]} / ${y[*]}\"",
 		"stable\n",
+	},
+
+	// The order itself is bash's hash-table order now, derived by
+	// measurement in expand/assocorder.go (#749). Every case below is
+	// checked against real bash by TestRunnerRunConfirm, so each is a
+	// measurement and not a prediction.
+	{
+		// The headline: two keys whose sorted order and whose hash
+		// order disagree.
+		"declare -A A; A[0]=aa; A[1]=bb; printf \"[%s]\" \"${A[@]}\"; echo",
+		"[bb][aa]\n",
+	},
+	{
+		// Neither sorted nor insertion order: inserted q a m, sorted
+		// a m q, bash q m a.
+		"declare -A A=([q]=1 [a]=2 [m]=3); echo \"${!A[@]}\"",
+		"q m a\n",
+	},
+	{
+		// Single-character keys land in descending buckets, which is the
+		// shape that gave the hash away: the whole alphabet comes back
+		// reversed however it went in.
+		"declare -A A; for x in {a..z}; do A[$x]=1; done; echo \"${!A[@]}\"\n" +
+			"declare -A B; for x in {z..a}; do B[$x]=1; done; echo \"${!B[@]}\"",
+		"z y x w v u t s r q p o n m l k j i h g f e d c b a\n" +
+			"z y x w v u t s r q p o n m l k j i h g f e d c b a\n",
+	},
+	{
+		// bz, 66 and edc share a bucket, so these two are the same set
+		// in the same buckets and differ only in when each key arrived:
+		// a bucket lists newest first.
+		"declare -A A=([bz]=1 [66]=2 [edc]=3); declare -A B=([edc]=1 [66]=2 [bz]=3); echo \"${!A[@]}\"; echo \"${!B[@]}\"",
+		"edc 66 bz\nbz 66 edc\n",
+	},
+	{
+		// Within that bucket: assigning over a key does not move it,
+		// and unsetting it and assigning again does.
+		"declare -A A; A[bz]=1; A[66]=2; A[edc]=3; A[bz]=9; echo \"${!A[@]}\"; unset \"A[66]\"; A[66]=7; echo \"${!A[@]}\"",
+		"edc 66 bz\n66 edc bz\n",
+	},
+	{
+		// A compound assignment inserts left to right, a repeated key
+		// keeping the place its first mention gave it, and `+=` carries
+		// on from the keys already there.
+		"declare -A A=([bz]=1 [66]=2 [bz]=3); declare -p A; declare -A B=([bz]=1); B+=([edc]=3 [66]=2); echo \"${!B[@]}\"",
+		"declare -A A=([66]=\"2\" [bz]=\"3\" )\n66 edc bz\n",
+	},
+	{
+		// Every surface that lists the array reads the same order:
+		// keys, values, @k, @K, @A and declare -p.
+		"declare -A A=([a]=1 [b]=2 [c]=3 [zz]=4); echo \"${!A[@]}\"; echo \"${A[@]}\"; echo \"${A[*]}\"; echo \"${A[@]@k}\"; echo \"${A[@]@K}\"; echo \"${A[@]@A}\"; declare -p A",
+		"c b a zz\n3 2 1 4\n3 2 1 4\nc 3 b 2 a 1 zz 4\nc \"3\" b \"2\" a \"1\" zz \"4\" \n" +
+			"declare -A A=([c]=\"3\" [b]=\"2\" [a]=\"1\" [zz]=\"4\" )\n" +
+			"declare -A A=([c]=\"3\" [b]=\"2\" [a]=\"1\" [zz]=\"4\" )\n",
+	},
+	{
+		// A bare `set` lists arrays through its own printer, which has
+		// to agree with declare -p's.
+		"declare -A A=([q]=1 [a]=2 [m]=3); set | grep '^A='",
+		"A=([q]=\"1\" [m]=\"3\" [a]=\"2\" )\n",
+	},
+	{
+		// A scalar promoted to an associative array by `declare -A`
+		// carries its value into key 0, and key 0 was there first: .GC
+		// shares 0's bucket and sorts before it, so a promotion that
+		// forgot to record the insertion would list them the other way.
+		"x=hi; declare -A x; x[.GC]=1; declare -p x",
+		"declare -A x=([.GC]=\"1\" [0]=\"hi\" )\n",
+	},
+	{
+		// The table grows, and the growth is visible: 2048 keys is the
+		// last count that fits the initial buckets and 2049 relays the
+		// whole table, so the two orders have nothing in common.
+		"declare -A A; for ((i=0;i<2048;i++)); do A[k$i]=$i; done; x=(${!A[@]}); echo \"${x[0]} ${x[1]} ${x[2046]} ${x[2047]} ${#x[@]}\"\n" +
+			"declare -A B; for ((i=0;i<2049;i++)); do B[k$i]=$i; done; y=(${!B[@]}); echo \"${y[0]} ${y[1]} ${y[2047]} ${y[2048]} ${#y[@]}\"",
+		"k1775 k1191 k832 k465 2048\nk1698 k1699 k1049 k1048 2049\n",
 	},
 }
 
@@ -11887,6 +11964,37 @@ func TestRunnerVars(t *testing.T) {
 
 	if want, got := "updated", r.Vars["foo"].String(); got != want {
 		t.Fatalf("wrong output:\nwant: %q\ngot:  %q", want, got)
+	}
+}
+
+// TestRunnerAssocOrderSequence pins the one property of the recorded
+// insertion sequence (#749) that no expansion can show: its length.
+//
+// Which place a key holds is settled by expand's own first-wins reading
+// of the sequence, so a writer that re-recorded a key it already had
+// would still list the array correctly — and would grow the sequence by
+// one entry, and clone it, on every assignment to the same key. A loop
+// that writes one key a thousand times is exactly that shape.
+func TestRunnerAssocOrderSequence(t *testing.T) {
+	t.Parallel()
+
+	r, err := interp.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := parse(t, nil, "declare -A A=([k]=0 [k]=1 [j]=2);"+
+		"for ((i = 0; i < 1000; i++)); do A[k]=$i; A[j]=$i; done")
+	ctx, cancel := context.WithTimeout(t.Context(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, f); err != nil {
+		t.Fatal(err)
+	}
+	vr := r.Vars["A"]
+	if len(vr.Map) != 2 {
+		t.Fatalf("wrong map: %v", vr.Map)
+	}
+	if want := []string{"k", "j"}; !slices.Equal(vr.MapOrder, want) {
+		t.Errorf("sequence grew or reordered:\nwant: %q\ngot:  %q", want, vr.MapOrder)
 	}
 }
 
